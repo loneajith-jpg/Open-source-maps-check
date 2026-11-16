@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Map Link Converter</title>
+<style>
+:root{--bg:#f6f7f4;--card:#fff;--ink:#1c2420;--mute:#62706a;--line:#dfe4de;--acc:#1f7a4d;--accink:#fff;--err:#b3261e;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#121815;--card:#1b231f;--ink:#e8eee9;--mute:#9aa8a0;--line:#2c3732;--acc:#4cc58a;--accink:#08130d;--err:#ff8a80}}
+:root[data-theme="dark"]{--bg:#121815;--card:#1b231f;--ink:#e8eee9;--mute:#9aa8a0;--line:#2c3732;--acc:#4cc58a;--accink:#08130d;--err:#ff8a80}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:640px;margin:0 auto;padding:24px 16px 48px}
+h1{font-size:1.5rem;margin:0 0 4px}
+p.sub{margin:0 0 18px;color:var(--mute)}
+textarea{width:100%;min-height:96px;padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--ink);font:inherit;resize:vertical}
+.row{display:flex;gap:8px;margin:10px 0 18px;flex-wrap:wrap}
+button,a.btn{font:inherit;border:1px solid var(--line);background:var(--card);color:var(--ink);padding:8px 14px;border-radius:10px;cursor:pointer;text-decoration:none;display:inline-block}
+button.primary{background:var(--acc);color:var(--accink);border-color:var(--acc);font-weight:600}
+.msg{padding:12px;border-radius:12px;border:1px solid var(--line);background:var(--card);margin-bottom:16px;color:var(--mute)}
+.msg.err{color:var(--err);border-color:var(--err)}
+.pin{font-weight:600;color:var(--ink)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px;margin-bottom:10px}
+.card h2{font-size:.95rem;margin:0 0 6px}
+.url{font:13px/1.4 ui-monospace,Menlo,Consolas,monospace;word-break:break-all;color:var(--mute);margin-bottom:8px}
+.acts{display:flex;gap:8px;flex-wrap:wrap}
+.acts button,.acts a.btn{padding:6px 12px;font-size:.9rem}
+small{color:var(--mute);display:block;margin-top:18px}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<main>
+<h1>Map Link Converter</h1>
+<p class="sub">Paste any map link from WhatsApp (Google Maps, OpenStreetMap, HERE WeGo, a geo: link) and get a link for every app.</p>
+<textarea id="in" placeholder="Paste a link here, for example https://www.google.com/maps/@12.9716,77.5946,15z" aria-label="Map link"></textarea>
+<div class="row">
+<button class="primary" id="go">Convert</button>
+<button id="paste">Paste from clipboard</button>
+<button id="clear">Clear</button>
+</div>
+<div id="status" class="msg" hidden></div>
+<div id="out"></div>
+<small>Runs entirely in your browser. Nothing is sent anywhere. Short links (maps.app.goo.gl) can’t be read offline: open them once in your browser and paste the full address instead.</small>
+</main>
+<script>
+(function(){
+var $=function(id){return document.getElementById(id)};
+var SHORT=/(maps\.app\.goo\.gl|goo\.gl\/maps|g\.co\/kgs|share\.google|omaps\.app|ge0\.me)/i;
+function ok(a,b){a=+a;b=+b;return isFinite(a)&&isFinite(b)&&Math.abs(a)<=90&&Math.abs(b)<=180}
+function parse(raw){
+  var t=raw.trim(); if(!t) return null;
+  var s=t; try{s=decodeURIComponent(t)}catch(e){}
+  var N="(-?\\d{1,3}(?:\\.\\d+)?)", m, lat, lon, z=16, name="";
+  var pn=s.match(/\/place\/([^\/@?]+)/);
+  if(pn){var n=pn[1].replace(/\+/g," "); if(!/^-?\d+(\.\d+)?,\s*-?\d+/.test(n)) name=n}
+  var zm=s.match(/@[^,]+,[^,]+,(\d+(?:\.\d+)?)z/)||s.match(/#map=(\d+)/)||s.match(/[?&]z(?:oom)?=(\d+)/);
+  if(zm) z=Math.round(+zm[1]);
+  var pats=[
+    new RegExp("!3d"+N+"!4d"+N),
+    new RegExp("mlat="+N+"&(?:amp;)?mlon="+N),
+    new RegExp("share\\.here\\.com/l/"+N+","+N),
+    new RegExp("[?&](?:q|query|ll|destination|daddr|center|saddr)="+N+",\\s*\\+?"+N),
+    new RegExp("@"+N+","+N),
+    new RegExp("#map=\\d+/"+N+"/"+N),
+    new RegExp("geo:"+N+","+N,"i"),
+    new RegExp("/maps/place/"+N+","+N)
+  ];
+  for(var i=0;i<pats.length;i++){
+    m=s.match(pats[i]);
+    if(m&&ok(m[1],m[2])){lat=+m[1];lon=+m[2];break}
+  }
+  if(lat===undefined){
+    if(SHORT.test(s)) return {short:true};
+    if(/google\.[a-z.]+\/maps/i.test(s)&&name) return {nameOnly:name};
+    return null;
+  }
+  return {lat:lat,lon:lon,z:z,name:name};
+}
+function fmt(x){return (+x).toFixed(6).replace(/0+$/,"").replace(/\.$/,"")}
+function build(p){
+  var c=fmt(p.lat)+","+fmt(p.lon), nm=p.name?encodeURIComponent(p.name):"";
+  return [
+    {t:"Google Maps (share this one on WhatsApp)",u:"https://www.google.com/maps?q="+c, open:true},
+    {t:"Organic Maps (opens the app)",u:"om://map?v=1&ll="+c+(nm?"&n="+nm:"")+"&zoom="+p.z, open:true},
+    {t:"geo: link (Organic Maps, Vela Maps, most Android apps)",u:"geo:"+c+"?z="+p.z, open:true},
+    {t:"OpenStreetMap",u:"https://www.openstreetmap.org/?mlat="+fmt(p.lat)+"&mlon="+fmt(p.lon)+"#map="+p.z+"/"+fmt(p.lat)+"/"+fmt(p.lon), open:true},
+    {t:"HERE WeGo",u:"https://share.here.com/l/"+c+"?z="+p.z, open:true},
+    {t:"Plain coordinates",u:c, open:false}
+  ];
+}
+function copy(text,btn){
+  var done=function(){var o=btn.textContent;btn.textContent="Copied ✓";setTimeout(function(){btn.textContent=o},1400)};
+  if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(text).then(done,function(){fb()})}else fb();
+  function fb(){var a=document.createElement("textarea");a.value=text;document.body.appendChild(a);a.select();try{document.execCommand("copy");done()}catch(e){}document.body.removeChild(a)}
+}
+function say(txt,err){var e=$("status");e.hidden=!txt;e.textContent=txt||"";e.className="msg"+(err?" err":"")}
+function render(){
+  var out=$("out"); out.textContent=""; say("");
+  var raw=$("in").value, p=parse(raw);
+  if(!raw.trim()) return;
+  if(!p){say("I couldn’t find a location in that text. Try a Google Maps link that contains coordinates, an OpenStreetMap link, or a geo: link.",true);return}
+  if(p.short){say("This is a short link, so the coordinates are hidden behind a redirect. Open it once in your browser, then copy the full address from the address bar and paste that here.",true);return}
+  if(p.nameOnly){
+    say("This link only has a place name (“"+p.nameOnly+"”) and no coordinates. Search it on OpenStreetMap, open the result, and paste that link here.",true);
+    var a=document.createElement("a");a.className="btn";a.target="_blank";a.rel="noopener";
+    a.href="https://www.openstreetmap.org/search?query="+encodeURIComponent(p.nameOnly);a.textContent="Search on OpenStreetMap";
+    out.appendChild(a);return;
+  }
+  say("");
+  var h=document.createElement("div");h.className="msg";
+  var b=document.createElement("span");b.className="pin";b.textContent="Found: "+fmt(p.lat)+", "+fmt(p.lon);
+  h.appendChild(b);if(p.name)h.appendChild(document.createTextNode(" · "+p.name));
+  out.appendChild(h);
+  build(p).forEach(function(r){
+    var c=document.createElement("div");c.className="card";
+    var t=document.createElement("h2");t.textContent=r.t;
+    var u=document.createElement("div");u.className="url";u.textContent=r.u;
+    var ac=document.createElement("div");ac.className="acts";
+    var cb=document.createElement("button");cb.className="primary";cb.textContent="Copy";
+    cb.onclick=function(){copy(r.u,cb)};ac.appendChild(cb);
+    if(r.open){var o=document.createElement("a");o.className="btn";o.href=r.u;o.textContent="Open";
+      if(/^https/.test(r.u)){o.target="_blank";o.rel="noopener"}ac.appendChild(o)}
+    c.appendChild(t);c.appendChild(u);c.appendChild(ac);out.appendChild(c);
+  });
+}
+$("go").onclick=render;
+$("in").addEventListener("input",render);
+$("clear").onclick=function(){$("in").value="";render()};
+$("paste").onclick=function(){
+  if(navigator.clipboard&&navigator.clipboard.readText){
+    navigator.clipboard.readText().then(function(t){$("in").value=t;render()},function(){say("Clipboard access was blocked. Long-press in the box and paste instead.",true)});
+  }else say("Your browser doesn’t allow clipboard reading. Long-press in the box and paste instead.",true);
+};
+})();
+</script>
+</body>
+</html>
