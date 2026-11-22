@@ -54,7 +54,7 @@ small{color:var(--mute);display:block;margin-top:18px}
    Leave it empty to keep everything offline: short Google links will
    then ask you to open them in a browser first.
 ------------------------------------------------------------------- */
-var RESOLVER_URL = "";
+var RESOLVER_URL = "https://map-resolver.loneajith.workers.dev/";
 
 var $=function(id){return document.getElementById(id)};
 var SHORT=/(maps\.app\.goo\.gl|goo\.gl\/maps|g\.co\/kgs|share\.google)/i;
@@ -86,8 +86,57 @@ function cleanName(s){
   return s.replace(/[_+]/g," ").trim();
 }
 
+
+/* Google Maps directions links (/maps/dir/Start/End/...): collect every waypoint
+   instead of only the first pin. Travel mode in the link: !3e0 car, 1 bike, 2 walk, 3 transit. */
+var MODES=["driving","bicycling","walking","transit"];
+function parseRoute(t){
+  var points=[], mode=0, m, k, ok2=true;
+  var NUM="(-?\\d{1,3}(?:\\.\\d+)?)";
+  var cre=new RegExp("^"+NUM+",\\s*"+NUM+"$");
+  var pm=t.match(/\/maps\/dir\/([^?#\s]*)/i);
+  if(pm&&pm[1]){
+    var segs=pm[1].split("/").filter(function(x){return x&&x.charAt(0)!=="@"&&x.indexOf("data=")!==0});
+    var pairs=[], re=new RegExp("!3d"+NUM+"!4d"+NUM,"g"), mm;
+    while((mm=re.exec(t))) pairs.push([+mm[1],+mm[2]]);
+    for(k=0;k<segs.length;k++){
+      var d=segs[k].replace(/\+/g," "); try{d=decodeURIComponent(d)}catch(e){}
+      var c=d.match(cre);
+      if(c&&ok(c[1],c[2])) points.push({lat:+c[1],lon:+c[2],name:""});
+      else if(pairs[k]&&ok(pairs[k][0],pairs[k][1])) points.push({lat:pairs[k][0],lon:pairs[k][1],name:d});
+      else ok2=false;
+    }
+    m=t.match(/!3e([0-3])/); if(m) mode=+m[1];
+  } else {
+    var s2=t; try{s2=decodeURIComponent(t)}catch(e){}
+    var o=s2.match(new RegExp("[?&]origin="+NUM+",\\s*"+NUM));
+    var dd=s2.match(new RegExp("[?&]destination="+NUM+",\\s*"+NUM));
+    if(!(o&&dd)||!/\/maps\/dir/i.test(s2)) return null;
+    points=[{lat:+o[1],lon:+o[2],name:""},{lat:+dd[1],lon:+dd[2],name:""}];
+    m=s2.match(/[?&]travelmode=(driving|bicycling|walking|transit)/); if(m) mode=MODES.indexOf(m[1]);
+  }
+  if(!ok2||points.length<2) return null;
+  return {route:true,points:points,mode:mode};
+}
+function buildRoute(p){
+  var a=p.points[0], b=p.points[p.points.length-1], mid=p.points.slice(1,-1);
+  var A=fmt(a.lat)+","+fmt(a.lon), B=fmt(b.lat)+","+fmt(b.lon);
+  var gm=MODES[p.mode], omType=["vehicle","bicycle","pedestrian","transit"][p.mode];
+  var osmEngine=["fossgis_osrm_car","fossgis_osrm_bike","fossgis_osrm_foot","fossgis_osrm_car"][p.mode];
+  var way=mid.length?"&waypoints="+mid.map(function(x){return fmt(x.lat)+","+fmt(x.lon)}).join("%7C"):"";
+  return [
+    {t:"Google Maps route (share this one on WhatsApp)",u:"https://www.google.com/maps/dir/?api=1&origin="+A+"&destination="+B+"&travelmode="+gm+way, open:true},
+    {t:"Organic Maps route (opens the app)"+(mid.length?" – start and end only, "+mid.length+" stop(s) left out":""),
+     u:"om://route?v=1&sll="+A+(a.name?"&saddr="+encodeURIComponent(a.name):"")+"&dll="+B+(b.name?"&daddr="+encodeURIComponent(b.name):"")+"&type="+omType, open:true},
+    {t:"OpenStreetMap route"+(mid.length?" – start and end only":"")+(p.mode===3?" (driving; transit isn’t available)":""),
+     u:"https://www.openstreetmap.org/directions?engine="+osmEngine+"&route="+A+"%3B"+B, open:true},
+    {t:"Start and end coordinates",u:"Start: "+A+"\nEnd: "+B, open:false}
+  ];
+}
+
 function parse(raw){
   var t=raw.trim(); if(!t) return null;
+  var rt=parseRoute(t); if(rt) return rt;
   var s=t; try{s=decodeURIComponent(t)}catch(e){}
   var N="(-?\\d{1,3}(?:\\.\\d+)?)", m, lat, lon, z=16, name="", approx=false;
 
@@ -148,6 +197,7 @@ function say(txt,err){var e=$("status");e.hidden=!txt;e.textContent=txt||"";e.cl
 function show(p){
   var out=$("out"); out.textContent=""; say("");
   if(!p){say("I couldn’t find a location in that text. Try a Google Maps link that contains coordinates, an Organic Maps (omaps.app) link, an OpenStreetMap link, or a geo: link.",true);return}
+  if(p.route){showRoute(p);return}
   if(p.short){
     say(RESOLVER_URL
       ? "I couldn’t resolve this short link. Open it once in your browser, then copy the full address from the address bar and paste that here."
@@ -165,10 +215,24 @@ function show(p){
   h.appendChild(b);if(p.name)h.appendChild(document.createTextNode(" · "+p.name));
   if(p.approx)h.appendChild(document.createTextNode(" · This link only has the map centre, so the pin may be slightly off the exact place."));
   out.appendChild(h);
-  build(p).forEach(function(r){
+  addCards(build(p));
+}
+function label(x){return x.name||(fmt(x.lat)+", "+fmt(x.lon))}
+function showRoute(p){
+  var out=$("out"), a=p.points[0], b=p.points[p.points.length-1];
+  var h=document.createElement("div");h.className="msg";
+  var t=document.createElement("span");t.className="pin";t.textContent="Route: "+label(a)+" → "+label(b);
+  h.appendChild(t);
+  h.appendChild(document.createTextNode(" · "+["driving","cycling","walking","public transport"][p.mode]+(p.points.length>2?" · "+(p.points.length-2)+" stop(s) in between":"")));
+  out.appendChild(h);
+  addCards(buildRoute(p));
+}
+function addCards(list){
+  var out=$("out");
+  list.forEach(function(r){
     var c=document.createElement("div");c.className="card";
     var t=document.createElement("h2");t.textContent=r.t;
-    var u=document.createElement("div");u.className="url";u.textContent=r.u;
+    var u=document.createElement("div");u.className="url";u.style.whiteSpace="pre-wrap";u.textContent=r.u;
     var ac=document.createElement("div");ac.className="acts";
     var cb=document.createElement("button");cb.className="primary";cb.textContent="Copy";
     cb.onclick=function(){copy(r.u,cb)};ac.appendChild(cb);
@@ -218,7 +282,7 @@ $("paste").onclick=function(){
   }else say("Your browser doesn’t allow clipboard reading. Long-press in the box and paste instead.",true);
 };
 
-if(typeof module!=="undefined") module.exports={parse:parse,build:build,decodeGe0:decodeGe0};
+if(typeof module!=="undefined") module.exports={parse:parse,build:build,decodeGe0:decodeGe0,buildRoute:buildRoute};
 })();
 </script>
 </body>
