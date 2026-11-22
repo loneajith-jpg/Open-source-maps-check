@@ -87,10 +87,46 @@ function cleanName(s){
 }
 
 
+/* HERE WeGo links: wego.here.com/r/<mode>/s-<code>/s-<code> (route) and wego.here.com/p/s-<code> (place).
+   Each s-<code> is base64 text like "lat=13.07745;lon=80.26085;n=Name;..." so it decodes offline. */
+function hereDecode(seg){
+  try{
+    var b=seg.replace(/^s-/,"").replace(/-/g,"+").replace(/_/g,"/");
+    while(b.length%4) b+="=";
+    var txt=atob(b), o={};
+    txt.split(";").forEach(function(kv){var i=kv.indexOf("="); if(i>0) o[kv.slice(0,i)]=kv.slice(i+1)});
+    if(!ok(o.lat,o.lon)) return null;
+    var nm=o.n||""; try{nm=decodeURIComponent(nm)}catch(e){}
+    return {lat:+o.lat,lon:+o.lon,name:nm};
+  }catch(e){return null}
+}
+function hereSegs(str){
+  var out=[], re=/\/(s-[^\/?#\s]+)/g, m;
+  while((m=re.exec(str))) out.push(m[1]);
+  return out;
+}
+function parseHereRoute(t){
+  var m=t.match(/wego\.here\.com\/r\/([A-Za-z]+)(\/[^?#\s]*)/i);
+  if(!m) return null;
+  var pts=hereSegs(m[2]).map(hereDecode);
+  if(pts.length<2||pts.some(function(x){return !x})) return null;
+  var md=m[1].toLowerCase(), mode=0;
+  if(md==="walk") mode=2; else if(md==="bicycle"||md==="bike") mode=1; else if(/transit|public/.test(md)) mode=3;
+  return {route:true,points:pts,mode:mode};
+}
+function parseHerePlace(t){
+  var m=t.match(/wego\.here\.com\/p(\/[^?#\s]*)/i);
+  if(!m) return null;
+  var segs=hereSegs(m[1]); if(!segs.length) return null;
+  var d=hereDecode(segs[0]); if(!d) return null;
+  return {lat:d.lat,lon:d.lon,z:16,name:d.name,approx:false};
+}
+
 /* Google Maps directions links (/maps/dir/Start/End/...): collect every waypoint
    instead of only the first pin. Travel mode in the link: !3e0 car, 1 bike, 2 walk, 3 transit. */
 var MODES=["driving","bicycling","walking","transit"];
 function parseRoute(t){
+  var hr=parseHereRoute(t); if(hr) return hr;
   var points=[], mode=0, m, k, ok2=true;
   var NUM="(-?\\d{1,3}(?:\\.\\d+)?)";
   var cre=new RegExp("^"+NUM+",\\s*"+NUM+"$");
@@ -128,15 +164,24 @@ function buildRoute(p){
     {t:"Google Maps route (share this one on WhatsApp)",u:"https://www.google.com/maps/dir/?api=1&origin="+A+"&destination="+B+"&travelmode="+gm+way, open:true},
     {t:"Organic Maps route (opens the app)"+(mid.length?" – start and end only, "+mid.length+" stop(s) left out":""),
      u:"om://route?v=1&sll="+A+(a.name?"&saddr="+encodeURIComponent(a.name):"")+"&dll="+B+(b.name?"&daddr="+encodeURIComponent(b.name):"")+"&type="+omType, open:true},
+    {t:"Open route directly in Organic Maps (Android only, keeps your default apps)"+(mid.length?" – start and end only":""),
+     u:"intent://route?v=1&sll="+A+"&dll="+B+"&type="+omType+"#Intent;scheme=om;package=app.organicmaps;S.browser_fallback_url="+encodeURIComponent("https://organicmaps.app")+";end", open:true, noCopy:true},
+    {t:"Open route directly in Vela Maps (Android only, start and end)",
+     u:"intent://www.google.com/maps/dir/?api=1&origin="+A+"&destination="+B+"&travelmode="+gm+way+"#Intent;scheme=https;package=app.vela;S.browser_fallback_url="+encodeURIComponent("https://github.com/PimpinPumpkin/Vela/releases")+";end", open:true, noCopy:true},
     {t:"OpenStreetMap route"+(mid.length?" – start and end only":"")+(p.mode===3?" (driving; transit isn’t available)":""),
      u:"https://www.openstreetmap.org/directions?engine="+osmEngine+"&route="+A+"%3B"+B, open:true},
+    p.mode===0?{t:"HERE WeGo route",u:"https://wego.here.com/r/drive/"+hereSeg(a)+"/"+hereSeg(b), open:true}:null,
     {t:"Start and end coordinates",u:"Start: "+A+"\nEnd: "+B, open:false}
-  ];
+  ].filter(Boolean);
+}
+function hereSeg(x){
+  return "s-"+btoa("lat="+fmt(x.lat)+";lon="+fmt(x.lon)+";n="+encodeURIComponent(x.name||"Place")+";ph=");
 }
 
 function parse(raw){
   var t=raw.trim(); if(!t) return null;
   var rt=parseRoute(t); if(rt) return rt;
+  var hp=parseHerePlace(t); if(hp) return hp;
   var s=t; try{s=decodeURIComponent(t)}catch(e){}
   var N="(-?\\d{1,3}(?:\\.\\d+)?)", m, lat, lon, z=16, name="", approx=false;
 
@@ -174,12 +219,21 @@ function parse(raw){
 }
 
 function fmt(x){return (+x).toFixed(6).replace(/0+$/,"").replace(/\.$/,"")}
+/* "Open in this exact app" links for Chrome on Android. They name the app by its package, so the
+   phone's chooser and default-app settings are never touched; if the app is missing, the fallback page opens. */
+function intentGeo(p,pkg,fallback){
+  return "intent:"+fmt(p.lat)+","+fmt(p.lon)+"?z="+p.z+"#Intent;scheme=geo;package="+pkg+";S.browser_fallback_url="+encodeURIComponent(fallback)+";end";
+}
 function build(p){
   var c=fmt(p.lat)+","+fmt(p.lon), nm=p.name?encodeURIComponent(p.name):"";
   return [
     {t:"Google Maps (share this one on WhatsApp)",u:"https://www.google.com/maps/search/?api=1&query="+c, open:true},
     {t:"Organic Maps (opens the app)",u:"om://map?v=1&ll="+c+(nm?"&n="+nm:"")+"&zoom="+p.z, open:true},
     {t:"geo: link (Organic Maps, CoMaps, OsmAnd, Vela Maps, most Android apps)",u:"geo:"+c+"?z="+p.z, open:true},
+    {t:"Open directly in Vela Maps (Android only, keeps your default apps)",u:intentGeo(p,"app.vela","https://github.com/PimpinPumpkin/Vela/releases"), open:true, noCopy:true},
+    {t:"Open directly in Vela Maps using the Google link (Android only, try this if the one above fails)",u:"intent://www.google.com/maps/search/?api=1&query="+c+"#Intent;scheme=https;package=app.vela;S.browser_fallback_url="+encodeURIComponent("https://github.com/PimpinPumpkin/Vela/releases")+";end", open:true, noCopy:true},
+    {t:"Open directly in Organic Maps (Android only, keeps your default apps)",u:intentGeo(p,"app.organicmaps","https://organicmaps.app"), open:true, noCopy:true},
+    {t:"Open directly in OsmAnd (Android only, keeps your default apps)",u:intentGeo(p,"net.osmand.plus","https://f-droid.org/packages/net.osmand.plus/"), open:true, noCopy:true},
     {t:"Organic Maps web link (omaps.app)",u:"https://omaps.app/"+c+(nm?"/"+nm:""), open:true},
     {t:"OpenStreetMap",u:"https://www.openstreetmap.org/?mlat="+fmt(p.lat)+"&mlon="+fmt(p.lon)+"#map="+p.z+"/"+fmt(p.lat)+"/"+fmt(p.lon), open:true},
     {t:"HERE WeGo",u:"https://share.here.com/l/"+c+"?z="+p.z, open:true},
@@ -223,7 +277,7 @@ function showRoute(p){
   var h=document.createElement("div");h.className="msg";
   var t=document.createElement("span");t.className="pin";t.textContent="Route: "+label(a)+" → "+label(b);
   h.appendChild(t);
-  h.appendChild(document.createTextNode(" · "+["driving","cycling","walking","public transport"][p.mode]+(p.points.length>2?" · "+(p.points.length-2)+" stop(s) in between":"")));
+  // h.appendChild(document.createTextNode(" · "+["driving","cycling","walking","public transport"][p.mode]+(p.points.length>2?" · "+(p.points.length-2)+" stop(s) in between":"")));
   out.appendChild(h);
   addCards(buildRoute(p));
 }
@@ -234,9 +288,9 @@ function addCards(list){
     var t=document.createElement("h2");t.textContent=r.t;
     var u=document.createElement("div");u.className="url";u.style.whiteSpace="pre-wrap";u.textContent=r.u;
     var ac=document.createElement("div");ac.className="acts";
-    var cb=document.createElement("button");cb.className="primary";cb.textContent="Copy";
-    cb.onclick=function(){copy(r.u,cb)};ac.appendChild(cb);
-    if(r.open){var o=document.createElement("a");o.className="btn";o.href=r.u;o.textContent="Open";
+    if(!r.noCopy){var cb=document.createElement("button");cb.className="primary";cb.textContent="Copy";
+    cb.onclick=function(){copy(r.u,cb)};ac.appendChild(cb);}
+    if(r.open){var o=document.createElement("a");o.className="btn"+(r.noCopy?" primary":"");o.href=r.u;o.textContent="Open";
       if(/^https/.test(r.u)){o.target="_blank";o.rel="noopener"}ac.appendChild(o)}
     c.appendChild(t);c.appendChild(u);c.appendChild(ac);out.appendChild(c);
   });
@@ -282,7 +336,7 @@ $("paste").onclick=function(){
   }else say("Your browser doesn’t allow clipboard reading. Long-press in the box and paste instead.",true);
 };
 
-if(typeof module!=="undefined") module.exports={parse:parse,build:build,decodeGe0:decodeGe0,buildRoute:buildRoute};
+if(typeof module!=="undefined") module.exports={parse:parse,parseHereRoute:parseHereRoute,build:build,decodeGe0:decodeGe0,buildRoute:buildRoute};
 })();
 </script>
 </body>
