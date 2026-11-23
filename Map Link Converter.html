@@ -159,14 +159,16 @@ function buildRoute(p){
   var A=fmt(a.lat)+","+fmt(a.lon), B=fmt(b.lat)+","+fmt(b.lon);
   var gm=MODES[p.mode], omType=["vehicle","bicycle","pedestrian","transit"][p.mode];
   var osmEngine=["fossgis_osrm_car","fossgis_osrm_bike","fossgis_osrm_foot","fossgis_osrm_car"][p.mode];
+  var sn=encodeURIComponent(a.name||"Start"), dn=encodeURIComponent(b.name||"Destination");
   var way=mid.length?"&waypoints="+mid.map(function(x){return fmt(x.lat)+","+fmt(x.lon)}).join("%7C"):"";
   return [
     {t:"Google Maps route (share this one on WhatsApp)",u:"https://www.google.com/maps/dir/?api=1&origin="+A+"&destination="+B+"&travelmode="+gm+way, open:true},
     {t:"Organic Maps route (opens the app)"+(mid.length?" – start and end only, "+mid.length+" stop(s) left out":""),
-     u:"om://route?v=1&sll="+A+(a.name?"&saddr="+encodeURIComponent(a.name):"")+"&dll="+B+(b.name?"&daddr="+encodeURIComponent(b.name):"")+"&type="+omType, open:true},
-    {t:"Open route directly in Organic Maps (Android only, keeps your default apps)"+(mid.length?" – start and end only":""),
-     u:"intent://route?v=1&sll="+A+"&dll="+B+"&type="+omType+"#Intent;scheme=om;package=app.organicmaps;S.browser_fallback_url="+encodeURIComponent("https://organicmaps.app")+";end", open:true, noCopy:true},
-    {t:"Open route directly in Vela Maps (Android only, start and end)",
+     u:"om://route?v=1&sll="+A+"&saddr="+sn+"&dll="+B+"&daddr="+dn+"&type="+omType, open:true},
+    {t:"Organic Maps: show only the destination (fallback if the route card fails)",u:"om://map?v=1&ll="+B+"&n="+dn+"&zoom=16", open:true},
+    {t:"Open route directly in Organic Maps (Android only)"+(mid.length?" – start and end only":""),
+     u:"intent://route?v=1&sll="+A+"&saddr="+sn+"&dll="+B+"&daddr="+dn+"&type="+omType+"#Intent;scheme=om;package=app.organicmaps;S.browser_fallback_url="+encodeURIComponent("https://organicmaps.app")+";end", open:true, noCopy:true},
+    {t:"Open route directly in Vela Maps (Android only, Coordinates are Accurate but places were not match as google maps)",
      u:"intent://www.google.com/maps/dir/?api=1&origin="+A+"&destination="+B+"&travelmode="+gm+way+"#Intent;scheme=https;package=app.vela;S.browser_fallback_url="+encodeURIComponent("https://github.com/PimpinPumpkin/Vela/releases")+";end", open:true, noCopy:true},
     {t:"OpenStreetMap route"+(mid.length?" – start and end only":"")+(p.mode===3?" (driving; transit isn’t available)":""),
      u:"https://www.openstreetmap.org/directions?engine="+osmEngine+"&route="+A+"%3B"+B, open:true},
@@ -277,7 +279,7 @@ function showRoute(p){
   var h=document.createElement("div");h.className="msg";
   var t=document.createElement("span");t.className="pin";t.textContent="Route: "+label(a)+" → "+label(b);
   h.appendChild(t);
-  // h.appendChild(document.createTextNode(" · "+["driving","cycling","walking","public transport"][p.mode]+(p.points.length>2?" · "+(p.points.length-2)+" stop(s) in between":"")));
+  h.appendChild(document.createTextNode(" · "+["driving","cycling","walking","public transport"][p.mode]+(p.points.length>2?" · "+(p.points.length-2)+" stop(s) in between":"")));
   out.appendChild(h);
   addCards(buildRoute(p));
 }
